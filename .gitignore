@@ -1,0 +1,16 @@
+.DS_Store
+build/
+build-*/
+Models/
+DerivedData/
+*.xcuserdata/
+*.xcuserstate
+*.xcodeproj/project.xcworkspace/
+*.mlmodelc/
+*.metallib
+*.dSYM/
+*.log
+*.pyc
+__pycache__/
+release/
+*.zip

@@ -1,0 +1,11 @@
+Stellaria Motion
+Copyright (C) 2026 Stellaria Studio
+
+Licensed under the GNU Affero General Public License version 3.
+See LICENSE for the full license text.
+
+Powered by Stellaria SP4.
+
+The bundled or optionally downloaded RIFE reference assets retain their
+upstream license and copyright notices. The reference safetensors package used
+by the development build includes the MIT license notice from Megvii Inc.

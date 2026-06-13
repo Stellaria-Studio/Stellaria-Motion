@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Stellaria Motion Agent",
+  "description": "Discovers browser video state for the native Stellaria Motion runtime.",
+  "version": "0.5.34",
+  "permissions": ["nativeMessaging", "scripting", "tabs"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "service_worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content_script.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

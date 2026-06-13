@@ -1,0 +1,10 @@
+{
+  "name": "studio.stellaria.motion",
+  "description": "Stellaria Motion Native Messaging Host",
+  "path": "/Applications/Stellaria Motion.app/Contents/MacOS/StellariaMotionNativeHost",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://REPLACE_WITH_EXTENSION_ID/"
+  ]
+}
+

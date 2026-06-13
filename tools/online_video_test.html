@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stellaria Motion Browser VFI Lab</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0e1118;
+      --panel: #171d27;
+      --panel-2: #202837;
+      --text: #edf6ff;
+      --muted: #9fb0c7;
+      --line: #344054;
+      --accent: #72f5d0;
+      --warn: #ffcc66;
+      --bad: #ff7a8a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    }
+    main {
+      width: min(1280px, calc(100vw - 32px));
+      margin: 24px auto;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 340px;
+      gap: 16px;
+      align-items: start;
+    }
+    .stage {
+      background: #05070b;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 20px 60px rgba(0,0,0,.32);
+    }
+    .chrome {
+      height: 38px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 14px;
+      background: #141922;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+    }
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 12px rgba(114,245,208,.4);
+    }
+    .video-wrap {
+      position: relative;
+      aspect-ratio: 16 / 9;
+      background: #000;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: #000;
+      object-fit: contain;
+    }
+    .hud {
+      position: absolute;
+      left: 16px;
+      top: 16px;
+      min-width: 220px;
+      padding: 10px 12px;
+      background: rgba(5, 9, 16, .72);
+      border: 1px solid rgba(255,255,255,.14);
+      border-radius: 8px;
+      font-variant-numeric: tabular-nums;
+      backdrop-filter: blur(12px);
+    }
+    .hud b {
+      color: var(--accent);
+      font-weight: 700;
+    }
+    aside {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }
+    h1 {
+      margin: 0 0 12px;
+      font-size: 18px;
+      line-height: 1.2;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .grid span:nth-child(odd) { color: var(--muted); }
+    .grid span:nth-child(even) { text-align: right; }
+    .row {
+      display: flex;
+      gap: 8px;
+      margin-top: 14px;
+      flex-wrap: wrap;
+    }
+    button, select {
+      appearance: none;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel-2);
+      color: var(--text);
+      padding: 8px 10px;
+      font: inherit;
+    }
+    button { cursor: pointer; }
+    button:hover { border-color: var(--accent); }
+    .status {
+      margin-top: 12px;
+      padding: 10px;
+      border-radius: 7px;
+      background: #101722;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+    .ok { color: var(--accent); }
+    .warn { color: var(--warn); }
+    .bad { color: var(--bad); }
+    @media (max-width: 980px) {
+      main { grid-template-columns: 1fr; }
+      aside { order: -1; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="stage">
+      <div class="chrome"><span class="dot"></span><span>simulated-video.example/watch?v=stellaria-motion</span></div>
+      <div class="video-wrap">
+        <video id="video" controls autoplay muted loop playsinline src="browser_vfi_sync_fixture.mp4"></video>
+        <div class="hud">
+          <div>Source <b id="hudSource">0.0</b> fps</div>
+          <div>Render <b id="hudRender">0.0</b> fps</div>
+          <div>Gap <b id="hudGap">0.0</b> ms</div>
+        </div>
+      </div>
+    </section>
+    <aside>
+      <h1>Browser VFI Lab</h1>
+      <div class="grid" id="metrics"></div>
+      <div class="row">
+        <button id="play">Play</button>
+        <button id="pause">Pause</button>
+        <button id="reset">Reset</button>
+        <button id="download">Download JSON</button>
+      </div>
+      <div class="row">
+        <select id="rate">
+          <option value="1">1.00x</option>
+          <option value="0.5">0.50x</option>
+          <option value="1.5">1.50x</option>
+          <option value="2">2.00x</option>
+        </select>
+        <select id="target">
+          <option value="60" selected>60 fps target</option>
+          <option value="120">120 fps target</option>
+          <option value="144">144 fps target</option>
+        </select>
+      </div>
+      <div class="status" id="status">Waiting for playback.</div>
+    </aside>
+  </main>
+  <canvas id="sample" width="160" height="90" hidden></canvas>
+  <script id="latestSnapshot" type="application/json">{}</script>
+  <script>
+    const video = document.getElementById("video");
+    const metrics = document.getElementById("metrics");
+    const status = document.getElementById("status");
+    const sample = document.getElementById("sample");
+    const sampleCtx = sample.getContext("2d", { willReadFrequently: true });
+    const state = {
+      startedAt: performance.now(),
+      lastVideoFrameAt: 0,
+      lastMediaTime: 0,
+      videoFrames: 0,
+      renderFrames: 0,
+      lastRenderAt: 0,
+      sourceFPS: 0,
+      renderFPS: 0,
+      videoGaps: [],
+      renderGaps: [],
+      maxVideoGapMs: 0,
+      maxRenderGapMs: 0,
+      stalls: 0,
+      freezes: 0,
+      blackSamples: 0,
+      samples: 0,
+      visualClockSamples: 0,
+      visualClockMisses: 0,
+      visualDrifts: [],
+      currentVisualDriftMs: 0,
+      visualDriftP95Ms: 0,
+      visualDriftP99Ms: 0,
+      outputCanvasDetected: false,
+      lastSampleHash: 0,
+      lastSampleChangedAt: performance.now(),
+      log: []
+    };
+    function fmt(value, digits = 1) {
+      return Number.isFinite(value) ? value.toFixed(digits) : "--";
+    }
+    function reset() {
+      Object.assign(state, {
+        startedAt: performance.now(),
+        lastVideoFrameAt: 0,
+        lastMediaTime: 0,
+        videoFrames: 0,
+        renderFrames: 0,
+        lastRenderAt: 0,
+        sourceFPS: 0,
+        renderFPS: 0,
+        videoGaps: [],
+        renderGaps: [],
+        maxVideoGapMs: 0,
+        maxRenderGapMs: 0,
+        stalls: 0,
+        freezes: 0,
+        blackSamples: 0,
+        samples: 0,
+        visualClockSamples: 0,
+        visualClockMisses: 0,
+        visualDrifts: [],
+        currentVisualDriftMs: 0,
+        visualDriftP95Ms: 0,
+        visualDriftP99Ms: 0,
+        outputCanvasDetected: false,
+        lastSampleHash: 0,
+        lastSampleChangedAt: performance.now(),
+        log: []
+      });
+    }
+    function sampleVideo() {
+      if (video.readyState < 2 || video.videoWidth < 2 || video.videoHeight < 2) {
+        return;
+      }
+      try {
+        sampleCtx.drawImage(video, 0, 0, sample.width, sample.height);
+        const data = sampleCtx.getImageData(0, 0, sample.width, sample.height).data;
+        let sum = 0;
+        let hash = 2166136261;
+        for (let i = 0; i < data.length; i += 16) {
+          const v = data[i] + data[i + 1] + data[i + 2];
+          sum += v;
+          hash ^= v;
+          hash = Math.imul(hash, 16777619);
+        }
+        state.samples += 1;
+        if (sum / Math.max(1, data.length / 16) < 8) {
+          state.blackSamples += 1;
+        }
+        if (hash !== state.lastSampleHash) {
+          state.lastSampleHash = hash;
+          state.lastSampleChangedAt = performance.now();
+        } else if (!video.paused && performance.now() - state.lastSampleChangedAt > 900) {
+          state.freezes += 1;
+          state.lastSampleChangedAt = performance.now();
+        }
+      } catch (error) {
+        state.log.push({ t: Date.now(), type: "sample_error", message: String(error?.message || error) });
+      }
+    }
+    function outputCanvas() {
+      const canvases = [...document.querySelectorAll('canvas[data-stellaria-motion-output="true"]')];
+      return canvases.find((canvas) => {
+        const rect = canvas.getBoundingClientRect();
+        return rect.width > 16 && rect.height > 16 && getComputedStyle(canvas).display !== "none";
+      }) || null;
+    }
+    function sampleVisualClock() {
+      const output = outputCanvas();
+      const source = output || video;
+      state.outputCanvasDetected = Boolean(output);
+      if ((source === video && video.readyState < 2) || !source) {
+        return;
+      }
+      try {
+        sampleCtx.drawImage(source, 0, 0, sample.width, sample.height);
+        const data = sampleCtx.getImageData(0, 0, sample.width, sample.height).data;
+        let weightSum = 0;
+        let xSum = 0;
+        for (let y = 0; y < sample.height; y += 1) {
+          for (let x = 0; x < sample.width; x += 1) {
+            const i = (y * sample.width + x) * 4;
+            const weight = Math.max(0, data[i + 1] - Math.max(data[i], data[i + 2]) - 40);
+            if (weight > 0) {
+              weightSum += weight;
+              xSum += weight * x;
+            }
+          }
+        }
+        if (weightSum <= 0) {
+          state.visualClockMisses += 1;
+          return;
+        }
+        const periodSeconds = 2.0;
+        const visualX = xSum / weightSum;
+        const visualPhase = (visualX / Math.max(1, sample.width - 1)) * periodSeconds;
+        const mediaPhase = ((video.currentTime % periodSeconds) + periodSeconds) % periodSeconds;
+        let drift = mediaPhase - visualPhase;
+        if (drift > periodSeconds * 0.5) drift -= periodSeconds;
+        if (drift < -periodSeconds * 0.5) drift += periodSeconds;
+        const driftMs = drift * 1000;
+        state.currentVisualDriftMs = driftMs;
+        state.visualClockSamples += 1;
+        pushSample(state.visualDrifts, Math.abs(driftMs));
+      } catch (error) {
+        state.visualClockMisses += 1;
+        state.log.push({ t: Date.now(), type: "visual_clock_error", message: String(error?.message || error) });
+      }
+    }
+    function pushSample(list, value) {
+      if (!Number.isFinite(value) || value <= 0) {
+        return;
+      }
+      list.push(value);
+      if (list.length > 2048) {
+        list.splice(0, list.length - 2048);
+      }
+    }
+    function percentile(list, pct) {
+      if (!list.length) {
+        return 0;
+      }
+      const sorted = [...list].sort((a, b) => a - b);
+      const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * pct) - 1));
+      return sorted[index];
+    }
+    function onVideoFrame(now, meta) {
+      const mediaTime = Number(meta?.mediaTime ?? video.currentTime ?? 0);
+      if (state.lastVideoFrameAt > 0) {
+        const gap = now - state.lastVideoFrameAt;
+        pushSample(state.videoGaps, gap);
+        state.maxVideoGapMs = Math.max(state.maxVideoGapMs, gap);
+        if (!video.paused && gap > 250) {
+          state.stalls += 1;
+        }
+        const instant = 1000 / Math.max(1, gap);
+        state.sourceFPS = state.sourceFPS > 0 ? state.sourceFPS * 0.85 + instant * 0.15 : instant;
+      }
+      state.videoFrames += 1;
+      state.lastVideoFrameAt = now;
+      state.lastMediaTime = mediaTime;
+      if (state.videoFrames % 10 === 0) {
+        sampleVideo();
+      }
+      if (state.videoFrames % 3 === 0) {
+        sampleVisualClock();
+      }
+      video.requestVideoFrameCallback(onVideoFrame);
+    }
+    function renderLoop(now) {
+      if (state.lastRenderAt > 0) {
+        const gap = now - state.lastRenderAt;
+        pushSample(state.renderGaps, gap);
+        state.maxRenderGapMs = Math.max(state.maxRenderGapMs, gap);
+        const instant = 1000 / Math.max(1, gap);
+        state.renderFPS = state.renderFPS > 0 ? state.renderFPS * 0.9 + instant * 0.1 : instant;
+      }
+      state.renderFrames += 1;
+      state.lastRenderAt = now;
+      updateUI();
+      requestAnimationFrame(renderLoop);
+    }
+    function snapshot() {
+      const elapsed = (performance.now() - state.startedAt) / 1000;
+      const targetFPS = Number(document.getElementById("target").value || 120);
+      const targetIntervalMs = 1000 / Math.max(1, targetFPS);
+      const videoP95 = percentile(state.videoGaps, 0.95);
+      const videoP99 = percentile(state.videoGaps, 0.99);
+      const renderP95 = percentile(state.renderGaps, 0.95);
+      const renderP99 = percentile(state.renderGaps, 0.99);
+      const visualDriftP95 = percentile(state.visualDrifts, 0.95);
+      const visualDriftP99 = percentile(state.visualDrifts, 0.99);
+      state.visualDriftP95Ms = visualDriftP95;
+      state.visualDriftP99Ms = visualDriftP99;
+      return {
+        elapsedSeconds: Number(elapsed.toFixed(3)),
+        targetFPS,
+        targetIntervalMs: Number(targetIntervalMs.toFixed(3)),
+        readyState: video.readyState,
+        paused: video.paused,
+        currentTime: Number(video.currentTime.toFixed(3)),
+        playbackRate: video.playbackRate,
+        videoWidth: video.videoWidth,
+        videoHeight: video.videoHeight,
+        videoFrames: state.videoFrames,
+        renderFrames: state.renderFrames,
+        sourceFPS: Number(state.sourceFPS.toFixed(3)),
+        renderFPS: Number(state.renderFPS.toFixed(3)),
+        videoGapP95Ms: Number(videoP95.toFixed(3)),
+        videoGapP99Ms: Number(videoP99.toFixed(3)),
+        renderGapP95Ms: Number(renderP95.toFixed(3)),
+        renderGapP99Ms: Number(renderP99.toFixed(3)),
+        outputCanvasDetected: state.outputCanvasDetected,
+        visualClockSamples: state.visualClockSamples,
+        visualClockMisses: state.visualClockMisses,
+        visualDriftMs: Number(state.currentVisualDriftMs.toFixed(3)),
+        visualDriftP95Ms: Number(visualDriftP95.toFixed(3)),
+        visualDriftP99Ms: Number(visualDriftP99.toFixed(3)),
+        visualSyncPass: visualDriftP95 > 0 && visualDriftP95 <= 65,
+        videoP99WithinTarget: videoP99 > 0 && videoP99 <= targetIntervalMs * 1.15,
+        renderP99WithinTarget: renderP99 > 0 && renderP99 <= targetIntervalMs * 1.15,
+        maxVideoGapMs: Number(state.maxVideoGapMs.toFixed(3)),
+        maxRenderGapMs: Number(state.maxRenderGapMs.toFixed(3)),
+        stalls: state.stalls,
+        freezes: state.freezes,
+        blackRatio: state.samples > 0 ? Number((state.blackSamples / state.samples).toFixed(4)) : 0,
+        log: state.log.slice(-40)
+      };
+    }
+    function updateUI() {
+      const s = snapshot();
+      document.getElementById("latestSnapshot").textContent = JSON.stringify(s);
+      document.getElementById("hudSource").textContent = fmt(s.sourceFPS);
+      document.getElementById("hudRender").textContent = fmt(s.renderFPS);
+      document.getElementById("hudGap").textContent = fmt(s.maxVideoGapMs);
+      const rows = [
+        ["ready", `${s.readyState}/4`],
+        ["target interval", `${fmt(s.targetIntervalMs, 2)} ms`],
+        ["video", `${s.videoWidth}x${s.videoHeight}`],
+        ["time", `${fmt(s.currentTime, 2)}s`],
+        ["source fps", fmt(s.sourceFPS)],
+        ["render fps", fmt(s.renderFPS)],
+        ["extension output", s.outputCanvasDetected ? "yes" : "no"],
+        ["visual drift now", `${fmt(s.visualDriftMs)} ms`],
+        ["visual drift p95 / p99", `${fmt(s.visualDriftP95Ms)} / ${fmt(s.visualDriftP99Ms)} ms`],
+        ["video p95 / p99", `${fmt(s.videoGapP95Ms)} / ${fmt(s.videoGapP99Ms)} ms`],
+        ["render p95 / p99", `${fmt(s.renderGapP95Ms)} / ${fmt(s.renderGapP99Ms)} ms`],
+        ["max video gap", `${fmt(s.maxVideoGapMs)} ms`],
+        ["max render gap", `${fmt(s.maxRenderGapMs)} ms`],
+        ["stalls", String(s.stalls)],
+        ["freezes", String(s.freezes)],
+        ["black ratio", fmt(s.blackRatio * 100, 2) + "%"]
+      ];
+      metrics.replaceChildren(...rows.flatMap(([k, v]) => {
+        const a = document.createElement("span");
+        const b = document.createElement("span");
+        a.textContent = k;
+        b.textContent = v;
+        return [a, b];
+      }));
+      const cls = s.stalls > 0 || s.freezes > 0 || !s.renderP99WithinTarget || !s.visualSyncPass ? "warn" : "ok";
+      const tail = `${s.renderP99WithinTarget ? "p99 ok" : "p99 over target"} · visual ${s.visualSyncPass ? "sync ok" : "sync drift"}`;
+      status.innerHTML = `<span class="${cls}">${video.paused ? "paused" : "playing"}</span> · ${tail} · frames ${s.videoFrames} · elapsed ${fmt(s.elapsedSeconds, 1)}s`;
+    }
+    document.getElementById("play").onclick = () => video.play();
+    document.getElementById("pause").onclick = () => video.pause();
+    document.getElementById("reset").onclick = reset;
+    document.getElementById("rate").onchange = (event) => {
+      video.playbackRate = Number(event.target.value || 1);
+    };
+    document.getElementById("download").onclick = () => {
+      const blob = new Blob([JSON.stringify(snapshot(), null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `stellaria-browser-vfi-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    };
+    ["play", "pause", "waiting", "stalled", "error", "ratechange", "seeked"].forEach((type) => {
+      video.addEventListener(type, () => state.log.push({ t: Date.now(), type }));
+    });
+    if (typeof video.requestVideoFrameCallback === "function") {
+      video.requestVideoFrameCallback(onVideoFrame);
+    } else {
+      state.log.push({ t: Date.now(), type: "error", message: "requestVideoFrameCallback unavailable" });
+    }
+    window.__stellariaBrowserVFILab = { snapshot, reset };
+    requestAnimationFrame(renderLoop);
+  </script>
+</body>
+</html>
