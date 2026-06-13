@@ -44,7 +44,7 @@ The browser extension remains useful for experiments and diagnostics, but the re
 
 ## Powered by Stellaria SP4
 
-Stellaria Motion consumes the real Stellaria SP4 SDK from the sibling checkout at `/Users/minsawa/Documents/Stellaria SP4` during local development. It is not a separate "Motion-only SP4" format. The Motion integration builds against the SDK headers and runtime concepts such as `.sp4` A1P assets, `sp4::LoadedAsset`, `sp4::RuntimePrepareOptions`, `sp4::PreparedRuntimeCache`, and the SP4 backend scheduling contract.
+Stellaria Motion consumes the real Stellaria SP4 SDK during local development. Point CMake at an adjacent or otherwise available SP4 checkout with `STELLARIA_SP4_SDK_DIR`; Motion does not define a separate "Motion-only SP4" format. The Motion integration builds against the SDK headers and runtime concepts such as `.sp4` A1P assets, `sp4::LoadedAsset`, `sp4::RuntimePrepareOptions`, `sp4::PreparedRuntimeCache`, and the SP4 backend scheduling contract.
 
 Motion's `RIFESP4Runner` is a product adapter around that SDK: SP4 owns the compressed asset, loader, prepared runtime cache, and scheduling intent; Motion owns the video-specific Metal texture packing, flow/mask execution, warp/blend, residual refine, pacing, and `CAMetalLayer` presentation.
 
@@ -106,13 +106,13 @@ cmake --build build-app --target StellariaMotionApp -j4
 ctest --test-dir build-app --output-on-failure
 ```
 
-For SP4-backed RIFE acceleration, keep the Stellaria SP4 SDK checkout available or override its path:
+For SP4-backed RIFE acceleration, keep the Stellaria SP4 SDK checkout available and pass its path through `STELLARIA_SP4_SDK_DIR`:
 
 ```bash
-cmake -S . -B build-app -DSTELLARIA_SP4_SDK_DIR="/Users/minsawa/Documents/Stellaria SP4"
+cmake -S . -B build-app -DSTELLARIA_SP4_SDK_DIR="/path/to/Stellaria-SP4"
 ```
 
-The public repository does not vendor the SP4 SDK or model weights into source control. Local development bundles `Models/RIFE-SP4/rife_sp4_a1p.sp4` when present, or falls back to the sibling SP4 build output.
+The public repository does not vendor the SP4 SDK or model weights into source control. Local development bundles `Models/RIFE-SP4/rife_sp4_a1p.sp4` when present, or falls back to the configured SP4 build output.
 
 Generate an Xcode project:
 
