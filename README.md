@@ -123,6 +123,14 @@ cmake --build build-xcode --config Debug
 
 The build generates `MotionKernels.metallib` on macOS and bundles it into the app. If Xcode reports a missing Metal toolchain, install Apple's Metal toolchain component and rebuild.
 
+Create a release zip that users can unpack and run directly:
+
+```bash
+./tools/package_release.sh
+```
+
+The release script verifies the bundled app executable, native host, Metal shader library, app icon, Bilibili cache helper, and RIFE/SP4 assets before writing `release/StellariaMotion-<version>-macOS-arm64.zip`.
+
 ## Realtime Validation
 
 `RealtimeVFITestCLI` runs the realtime backend against a real local video and reports backend execution, generated frames, GPU timing, coverage, effective fps, realtime factor, and optional `powermetrics` samples.

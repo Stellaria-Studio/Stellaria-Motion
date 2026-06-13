@@ -14,7 +14,7 @@
 
 - `Sources/Metal`
   - Metal shader 库与基础 runtime。
-  - 关键 kernel 包括 fused 插帧、RIFE pack/unpack、INT4 flow/mask、INT4 blend、SP4 residual refine、Core ML flow/mask blend。
+  - 关键 kernel 包括 fused 插帧、RIFE pack/unpack、INT4 flow/mask、INT4 blend、SP4 prepared flow/mask、SP4 blend/refine 与输出保护。
 
 - `Sources/Video`
   - 本地播放器实时插帧。
@@ -27,10 +27,9 @@
   - 当前包含 MPSGraph RIFE、Core ML RIFE、Metal INT4、Stellaria SP4 SDK A1P。
 
 - `Sources/BrowserAgent`
-  - Google Chrome extension。
-  - Native Messaging host。
-  - WebSocket stream bridge。
-  - VideoToolbox decode/encode 与浏览器 canvas 回推。
+  - Google Chrome extension 与 Native Messaging host。
+  - 实验性浏览器桥接、状态同步和诊断入口。
+  - 浏览器实时回推不是当前稳定产品主路径。
 
 - `Tests`
   - Core 行为测试。
@@ -90,23 +89,21 @@ Stellaria SP4 SDK rife_sp4_a1p.sp4
   -> output texture
 ```
 
-当前 SP4 已经使用 SDK `.sp4` container 与 runtime metadata，并支持 single command-buffer 多 t presentation 复用第一次 flow。最新本地完整视频测试中，432p/540p 60fps 与 360p/432p 120fps 已进入实时可用区间；720p flow 仍作为质量实验档，后续继续依赖 tiled/fused SP4 graph 扩大覆盖。
+当前 SP4 已经使用 SDK `.sp4` container 与 runtime metadata，并支持 single command-buffer 多 t presentation 复用第一次 flow。当前代码中的 SP4 实时档位为 60fps: 360p/432p/540p，120fps: 288p/360p/432p；更高 flow height 仅在 Ultimate 手动或离线/质量实验场景使用。
+
+Motion 侧的 SP4 接入消费 Stellaria SP4 SDK 的 A1P asset、loader 与 runtime cache metadata；它不是另起一套独立的 Motion-only SP4 格式。公开源码不包含模型权重或本地 SDK 构建产物，发布包只在存在可用资源时打包对应资产。
 
 ## 5. 浏览器回推路径
 
 ```text
 Browser video element
-  -> captureStream / WebCodecs
-  -> WebSocket payload
-  -> BrowserStreamBridge
-  -> VideoToolbox decode
-  -> CVMetalTextureCache
+  -> Chrome extension / native host
+  -> native bridge metadata or frame payload
   -> selected VFI backend
-  -> VideoToolbox encode
-  -> browser canvas overlay
+  -> experimental browser overlay / return path
 ```
 
-浏览器路径仍支持 `stellaria_sp4_a1p`，并维护 SP4 runner cache。它现在是次优先级路径，主要用于网页视频增强和兼容测试。
+浏览器路径仅作为 Chrome 兼容实验保留。开发过程中已经确认，直接从浏览器读帧、进 App 插帧、再回推到页面的链路容易受到浏览器 compositor、帧读取抖动、编码/回推队列和音画同步影响。当前稳定产品方向是本地/缓存媒体进入原生播放器后再插帧；浏览器桥主要用于诊断和兼容测试。
 
 ## 6. 离线导出路径
 
@@ -121,7 +118,7 @@ AVAssetReader
   -> MP4
 ```
 
-当前离线链路已经接入 `RIFESP4Runner`，优先复用实时播放的 SP4/RIFE 路径生成中间帧。若 SP4 asset、Metal texture cache 或 runtime 执行不可用，导出会降级到 fused Metal 插帧；如果 Metal 路径也不可用，则使用 Core Image 线性混合与上采样兜底。离线导出因此成为质量优先路径，同时保留可完成导出的稳定 fallback。
+当前离线链路已经接入 `RIFESP4Runner`，优先复用实时播放的 SP4/RIFE 路径生成中间帧。若 SP4 asset、Metal texture cache 或 runtime 执行不可用，导出会降级到 fused Metal 插帧；如果 Metal 路径也不可用，则使用 Core Image 线性混合与上采样兜底。离线导出不承担实时功耗预算，因此是质量优先路径，同时保留可完成导出的稳定 fallback。
 
 ## 7. 运行时 pacing
 
@@ -129,7 +126,7 @@ AVAssetReader
 
 - input side：从 AVPlayerItemVideoOutput 或浏览器 bridge 获取源帧。
 - processing side：生成 `displayMid` 和 `displayNext`。
-- output side：display timer 按目标 FPS 推进 `CAMetalLayer` 或浏览器 canvas。
+- output side：display timer 按目标 FPS 推进 `CAMetalLayer`；浏览器实验路径另行维护自己的 overlay/return 时钟。
 
 这样可以避免模型输出迟到时回拨播放相位。插帧结果迟到时会被跳过或 fallback，而不是破坏播放器时间轴。
 
@@ -139,8 +136,8 @@ AVAssetReader
 
 ```bash
 cmake -S . -B build-app
-cmake --build build-app --target StellariaMotionApp RIFESP4Smoke RealtimeVFITestCLI -j 8
-ctest --test-dir build-app -R 'RIFESP4Smoke|RealtimeVFITestCLI|RIFEMetal4BitSmoke|LocalPlayerVideoOutputSmoke|RealtimeVFIPacingSmoke' --output-on-failure
+cmake --build build-app --target StellariaMotionApp MotionOfflineProcessorSmoke RealtimeVFITestCLI -j 8
+ctest --test-dir build-app --output-on-failure
 ```
 
 关键测试：

@@ -345,6 +345,7 @@ CGRect SMOverlayFrameFromBrowserRect(CGRect browserRect) {
 @property(strong) NSArray<NSLayoutConstraint*>* localPreviewConstraints;
 @property(assign) double currentVideoAspect;
 @property(strong) NSButton* playerPlayPauseButton;
+@property(strong) AVPlayer* activePlayer;
 @property(strong) NSButton* playerFullscreenButton;
 @property(strong) NSSlider* playerSeekSlider;
 @property(strong) NSTextField* playerCurrentTimeLabel;
@@ -362,6 +363,8 @@ CGRect SMOverlayFrameFromBrowserRect(CGRect browserRect) {
 @property(strong) NSTextField* playerFullscreenCurrentTimeLabel;
 @property(strong) NSTextField* playerFullscreenDurationLabel;
 @property(strong) NSButton* playerFullscreenPlayPauseButton;
+@property(strong) NSTimer* playerFullscreenControlsHideTimer;
+@property(strong) id playerFullscreenMouseMoveMonitor;
 @property(assign) BOOL playerVideoFullscreen;
 @property(strong) NSTableView* playlistTableView;
 @property(strong) NSMutableArray<NSString*>* playlistPaths;
@@ -783,6 +786,9 @@ CGRect SMOverlayFrameFromBrowserRect(CGRect browserRect) {
     [self.playerView.heightAnchor constraintEqualToAnchor:self.playerView.widthAnchor multiplier:9.0 / 16.0].active = YES;
     [self.playerView.heightAnchor constraintGreaterThanOrEqualToConstant:320].active = YES;
     [self installLocalPreviewLayerInPlayerView];
+    if (self.activePlayer != nil) {
+        self.playerView.player = self.activePlayer;
+    }
 
     NSView* controls = [self buildPlayerControlsCard];
     [previewBody addArrangedSubview:controls];
@@ -974,7 +980,7 @@ CGRect SMOverlayFrameFromBrowserRect(CGRect browserRect) {
 }
 
 - (AVPlayer*)currentPlayer {
-    return self.playerView.player;
+    return self.playerView.player ?: self.activePlayer;
 }
 
 - (double)selectedPlayerRate {
@@ -1053,7 +1059,7 @@ CGRect SMOverlayFrameFromBrowserRect(CGRect browserRect) {
         [self playPreview:nil];
         return;
     }
-    if (player.currentItem == nil) {
+    if (player == nil || player.currentItem == nil) {
         return;
     }
     if (player.rate > 0.001) {
@@ -1062,11 +1068,12 @@ CGRect SMOverlayFrameFromBrowserRect(CGRect browserRect) {
         player.rate = [self selectedPlayerRate];
     }
     [self refreshPlayerControls:nil];
+    [self showPlayerFullscreenControlsAndScheduleHide];
 }
 
 - (void)playerSeekChanged:(NSSlider*)sender {
     AVPlayer* player = [self currentPlayer];
-    if (player.currentItem == nil) {
+    if (player == nil || player.currentItem == nil) {
         return;
     }
     CMTime target = CMTimeMakeWithSeconds(sender.doubleValue, 600);
@@ -1080,12 +1087,13 @@ CGRect SMOverlayFrameFromBrowserRect(CGRect browserRect) {
 - (void)playerSkipBySeconds:(double)seconds {
     AVPlayer* player = [self currentPlayer];
     const double duration = [self currentPlayerDurationSeconds];
-    if (player.currentItem == nil || duration <= 0.0) {
+    if (player == nil || player.currentItem == nil || duration <= 0.0) {
         return;
     }
     const double current = CMTIME_IS_NUMERIC(player.currentTime) ? CMTimeGetSeconds(player.currentTime) : 0.0;
     const double targetSeconds = MIN(MAX(current + seconds, 0.0), duration);
     [player seekToTime:CMTimeMakeWithSeconds(targetSeconds, 600) toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];
+    [self showPlayerFullscreenControlsAndScheduleHide];
 }
 
 - (void)playerSkipBackward:(id)sender {
@@ -1134,14 +1142,17 @@ CGRect SMOverlayFrameFromBrowserRect(CGRect browserRect) {
         }
         if (event.keyCode == 49) {
             [self playerTogglePlayPause:nil];
+            [self showPlayerFullscreenControlsAndScheduleHide];
             return nil;
         }
         if (event.keyCode == 123) {
             [self playerSkipBySeconds:-5.0];
+            [self showPlayerFullscreenControlsAndScheduleHide];
             return nil;
         }
         if (event.keyCode == 124) {
             [self playerSkipBySeconds:5.0];
+            [self showPlayerFullscreenControlsAndScheduleHide];
             return nil;
         }
         if (event.keyCode == 53 && (self.playerVideoFullscreen || self.playerFullscreenWindow != nil)) {
@@ -1153,14 +1164,12 @@ CGRect SMOverlayFrameFromBrowserRect(CGRect browserRect) {
 }
 
 - (NSView*)buildPlayerFullscreenControlsView {
-    NSView* controls = [SMFlippedView new];
+    SMGlassCard card = SMGlass(YES, 22, SMColor(0.04, 0.05, 0.07, 0.58));
+    NSView* controls = card.view;
     controls.translatesAutoresizingMaskIntoConstraints = NO;
-    controls.wantsLayer = YES;
-    SMApplyChromeLayer(controls, 18, SMColor(0.82, 0.92, 1.0, 0.20), 0.72);
 
     NSStackView* stack = SMVStack(10);
-    [controls addSubview:stack];
-    SMFill(stack, controls, 14);
+    SMInstallInCard(card.content, stack, 14);
 
     NSStackView* seekRow = SMHStack(10);
     [stack addArrangedSubview:seekRow];
@@ -1216,6 +1225,34 @@ CGRect SMOverlayFrameFromBrowserRect(CGRect browserRect) {
     [commandRow addArrangedSubview:exitButton];
 
     return controls;
+}
+
+- (void)showPlayerFullscreenControlsAndScheduleHide {
+    if (self.playerFullscreenControlsView == nil) {
+        return;
+    }
+    [self.playerFullscreenControlsHideTimer invalidate];
+    self.playerFullscreenControlsHideTimer = nil;
+    self.playerFullscreenControlsView.hidden = NO;
+    self.playerFullscreenControlsView.alphaValue = 1.0;
+    self.playerFullscreenControlsHideTimer = [NSTimer scheduledTimerWithTimeInterval:2.4
+                                                                               target:self
+                                                                             selector:@selector(hidePlayerFullscreenControls:)
+                                                                             userInfo:nil
+                                                                              repeats:NO];
+}
+
+- (void)hidePlayerFullscreenControls:(NSTimer*)timer {
+    (void)timer;
+    if (self.playerFullscreenControlsView == nil) {
+        return;
+    }
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext* context) {
+        context.duration = 0.22;
+        self.playerFullscreenControlsView.animator.alphaValue = 0.0;
+    } completionHandler:^{
+        self.playerFullscreenControlsView.hidden = YES;
+    }];
 }
 
 - (NSView*)buildExportPage {
@@ -4503,8 +4540,8 @@ CGRect SMOverlayFrameFromBrowserRect(CGRect browserRect) {
             NSURL* url = [NSURL fileURLWithPath:path];
             [self addURLToPlaylist:url select:YES];
             [self savePlaylistToDefaults];
-            [self loadImportedURL:url autoplay:YES];
             [self selectSection:0];
+            [self loadImportedURL:url autoplay:YES];
         });
     };
     NSError* launchError = nil;
@@ -4556,8 +4593,9 @@ CGRect SMOverlayFrameFromBrowserRect(CGRect browserRect) {
     self.importedFileLabel.stringValue = url.lastPathComponent ?: @"已导入视频";
     self.previewStatusLabel.stringValue = autoplay ? @"增强播放启动中" : @"已载入，按播放开始增强";
     self.playerView.videoGravity = AVLayerVideoGravityResizeAspect;
-    self.playerView.player = [AVPlayer playerWithURL:url];
-    self.playerView.player.volume = static_cast<float>(self.playerVolumeSlider != nil ? self.playerVolumeSlider.doubleValue : 1.0);
+    self.activePlayer = [AVPlayer playerWithURL:url];
+    self.activePlayer.volume = static_cast<float>(self.playerVolumeSlider != nil ? self.playerVolumeSlider.doubleValue : 1.0);
+    self.playerView.player = self.activePlayer;
     [self refreshInterpolationModeControls];
     [self saveSettingsFromControls];
     [self savePlaylistToDefaults];
@@ -4594,6 +4632,7 @@ CGRect SMOverlayFrameFromBrowserRect(CGRect browserRect) {
             [self loadImportedURL:[NSURL fileURLWithPath:self.importedPath] autoplay:NO];
         } else {
             self.playerView.player = nil;
+            self.activePlayer = nil;
             self.importedFileLabel.stringValue = @"尚未选择文件";
             self.previewStatusLabel.stringValue = @"等待导入视频";
         }
@@ -4673,8 +4712,10 @@ CGRect SMOverlayFrameFromBrowserRect(CGRect browserRect) {
     ]];
     [self refreshPlayerControls:nil];
     [self installPlayerFullscreenEscapeMonitor];
+    [self installPlayerFullscreenMouseMoveMonitor];
     [fullscreenWindow makeKeyAndOrderFront:nil];
     [fullscreenWindow toggleFullScreen:nil];
+    [self showPlayerFullscreenControlsAndScheduleHide];
 }
 
 - (void)exitPlayerFullscreen {
@@ -4698,6 +4739,23 @@ CGRect SMOverlayFrameFromBrowserRect(CGRect browserRect) {
         if (event.keyCode == 53 && (self.playerVideoFullscreen || self.playerFullscreenWindow != nil)) {
             [self exitPlayerFullscreen];
             return nil;
+        }
+        if (self.playerFullscreenWindow != nil) {
+            [self showPlayerFullscreenControlsAndScheduleHide];
+        }
+        return event;
+    }];
+}
+
+- (void)installPlayerFullscreenMouseMoveMonitor {
+    if (self.playerFullscreenMouseMoveMonitor != nil) {
+        return;
+    }
+    MotionAppDelegate* __weak weakSelf = self;
+    self.playerFullscreenMouseMoveMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskMouseMoved | NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown handler:^NSEvent* (NSEvent* event) {
+        MotionAppDelegate* __strong self = weakSelf;
+        if (self != nil && self.playerFullscreenWindow != nil) {
+            [self showPlayerFullscreenControlsAndScheduleHide];
         }
         return event;
     }];
@@ -4734,6 +4792,9 @@ CGRect SMOverlayFrameFromBrowserRect(CGRect browserRect) {
     self.playerVideoFullscreen = NO;
     self.playerFullscreenButton.title = @"全屏";
     [self removePlayerFullscreenEscapeMonitor];
+    [self removePlayerFullscreenMouseMoveMonitor];
+    [self.playerFullscreenControlsHideTimer invalidate];
+    self.playerFullscreenControlsHideTimer = nil;
     [self installLocalPreviewLayerInPlayerView];
     NSWindow* window = self.playerFullscreenWindow;
     [self.playerFullscreenControlsView removeFromSuperview];
@@ -4755,6 +4816,13 @@ CGRect SMOverlayFrameFromBrowserRect(CGRect browserRect) {
     if (self.playerFullscreenEventMonitor != nil) {
         [NSEvent removeMonitor:self.playerFullscreenEventMonitor];
         self.playerFullscreenEventMonitor = nil;
+    }
+}
+
+- (void)removePlayerFullscreenMouseMoveMonitor {
+    if (self.playerFullscreenMouseMoveMonitor != nil) {
+        [NSEvent removeMonitor:self.playerFullscreenMouseMoveMonitor];
+        self.playerFullscreenMouseMoveMonitor = nil;
     }
 }
 
@@ -4803,6 +4871,7 @@ CGRect SMOverlayFrameFromBrowserRect(CGRect browserRect) {
     AVPlayerItem* item = [AVPlayerItem playerItemWithURL:inputURL];
     AVPlayer* player = [AVPlayer playerWithPlayerItem:item];
     player.volume = static_cast<float>(self.playerVolumeSlider != nil ? self.playerVolumeSlider.doubleValue : 1.0);
+    self.activePlayer = player;
     [self installLocalPreviewLayerInPlayerView];
     self.localPreviewView.hidden = YES;
     self.localPreviewLayer.frame = self.localPreviewView.bounds;
@@ -5047,6 +5116,13 @@ CGRect SMOverlayFrameFromBrowserRect(CGRect browserRect) {
     [self exitPlayerFullscreen];
     [self writeOnlineStatus:@{@"running": @NO, @"state": @"stopped", @"message": @"App terminated"}];
     [self.playerControlTimer invalidate];
+    [self.playerFullscreenControlsHideTimer invalidate];
+    [self removePlayerFullscreenEscapeMonitor];
+    [self removePlayerFullscreenMouseMoveMonitor];
+    if (self.playerKeyboardEventMonitor != nil) {
+        [NSEvent removeMonitor:self.playerKeyboardEventMonitor];
+        self.playerKeyboardEventMonitor = nil;
+    }
     [self.exportTimer invalidate];
 }
 
