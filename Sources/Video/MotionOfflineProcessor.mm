@@ -1,9 +1,18 @@
 #include "Video/MotionOfflineProcessor.h"
 
+#include "VFI/RIFESP4Runner.h"
+
 #import <AVFoundation/AVFoundation.h>
 #import <CoreImage/CoreImage.h>
 #import <Metal/Metal.h>
 #import <simd/simd.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <string>
 
 namespace {
 
@@ -57,6 +66,34 @@ struct SMBGRAInterpolateParams {
     float t;
 };
 
+uint32_t SMAlign16(uint32_t value) {
+    return std::max<uint32_t>(16, ((value + 15) / 16) * 16);
+}
+
+uint32_t SMClampOfflineModelHeight(CGSize sourceSize) {
+    const uint32_t sourceHeight = static_cast<uint32_t>(std::max(16.0, std::round(sourceSize.height)));
+    const uint32_t target = std::min<uint32_t>(sourceHeight, 544);
+    return std::max<uint32_t>(16, (target / 16) * 16);
+}
+
+uint32_t SMRIFEWidthForHeight(CGSize sourceSize, uint32_t modelHeight) {
+    const double aspect = sourceSize.width / std::max(1.0, sourceSize.height);
+    return SMAlign16(static_cast<uint32_t>(std::max(16.0, std::round(aspect * modelHeight))));
+}
+
+std::string SMOfflineRIFEModelPath() {
+    NSURL* bundled = [[NSBundle mainBundle] URLForResource:@"flownet"
+                                             withExtension:@"safetensors"
+                                              subdirectory:@"Models/RIFE-safetensors"];
+    if (bundled != nil) {
+        return bundled.path.UTF8String;
+    }
+    if (const char* env = std::getenv("STELLARIA_MOTION_RIFE_MODEL")) {
+        return env;
+    }
+    return "Models/RIFE-safetensors/flownet.safetensors";
+}
+
 NSURL* SMMotionKernelLibraryURL() {
     NSURL* bundled = [[NSBundle mainBundle] URLForResource:@"MotionKernels" withExtension:@"metallib"];
     if (bundled != nil) {
@@ -99,6 +136,76 @@ BOOL SMCreateTexture(CVMetalTextureCacheRef cache,
     *textureOut = texture;
     *textureRefOut = textureRef;
     return YES;
+}
+
+CVPixelBufferRef SMCreateBGRAIntermediateBuffer(size_t width, size_t height) {
+    NSDictionary* attrs = @{
+        (NSString*)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+        (NSString*)kCVPixelBufferWidthKey: @(width),
+        (NSString*)kCVPixelBufferHeightKey: @(height),
+        (NSString*)kCVPixelBufferMetalCompatibilityKey: @YES,
+        (NSString*)kCVPixelBufferIOSurfacePropertiesKey: @{},
+    };
+    CVPixelBufferRef buffer = nullptr;
+    CVReturn result = CVPixelBufferCreate(kCFAllocatorDefault,
+                                          width,
+                                          height,
+                                          kCVPixelFormatType_32BGRA,
+                                          (__bridge CFDictionaryRef)attrs,
+                                          &buffer);
+    return result == kCVReturnSuccess ? buffer : nullptr;
+}
+
+BOOL SMRenderRIFESP4Frame(Stellaria::Motion::RIFESP4Runner* runner,
+                          CVMetalTextureCacheRef textureCache,
+                          CVPixelBufferRef previousBuffer,
+                          CVPixelBufferRef currentBuffer,
+                          CVPixelBufferRef outputBuffer,
+                          uint32_t sourceWidth,
+                          uint32_t sourceHeight,
+                          float t,
+                          NSString** message) {
+    if (runner == nullptr || !runner->IsReady() || textureCache == nullptr ||
+        previousBuffer == nullptr || currentBuffer == nullptr || outputBuffer == nullptr) {
+        if (message != nullptr) {
+            *message = @"RIFE SP4 未就绪";
+        }
+        return NO;
+    }
+
+    id<MTLTexture> previousTexture = nil;
+    id<MTLTexture> currentTexture = nil;
+    id<MTLTexture> outputTexture = nil;
+    CVMetalTextureRef previousTextureRef = nullptr;
+    CVMetalTextureRef currentTextureRef = nullptr;
+    CVMetalTextureRef outputTextureRef = nullptr;
+    BOOL ok = NO;
+    if (SMCreateTexture(textureCache, previousBuffer, MTLPixelFormatBGRA8Unorm, &previousTexture, &previousTextureRef) &&
+        SMCreateTexture(textureCache, currentBuffer, MTLPixelFormatBGRA8Unorm, &currentTexture, &currentTextureRef) &&
+        SMCreateTexture(textureCache, outputBuffer, MTLPixelFormatBGRA8Unorm, &outputTexture, &outputTextureRef)) {
+        Stellaria::Motion::RIFESP4RunResult result =
+            runner->RunTexturesAtT((__bridge void*)previousTexture,
+                                   (__bridge void*)currentTexture,
+                                   (__bridge void*)outputTexture,
+                                   sourceWidth,
+                                   sourceHeight,
+                                   t);
+        ok = result.ok;
+        if (!ok && message != nullptr) {
+            *message = [NSString stringWithUTF8String:result.message.c_str()];
+        }
+    }
+
+    if (previousTextureRef != nullptr) {
+        CFRelease(previousTextureRef);
+    }
+    if (currentTextureRef != nullptr) {
+        CFRelease(currentTextureRef);
+    }
+    if (outputTextureRef != nullptr) {
+        CFRelease(outputTextureRef);
+    }
+    return ok;
 }
 
 BOOL SMSafeAppendPixelBuffer(AVAssetWriterInputPixelBufferAdaptor* adaptor,
@@ -347,6 +454,20 @@ BOOL SMWaitForWriterInputReady(AVAssetWriterInput* input,
                 }
             }
         }
+        std::unique_ptr<Stellaria::Motion::RIFESP4Runner> rifeRunner;
+        BOOL rifeReady = NO;
+        BOOL rifeDisabledAfterFailure = NO;
+        NSString* offlineEngine = @"Metal blend";
+        if (device != nil && commandQueue != nil && textureCache != nullptr) {
+            const uint32_t modelHeight = SMClampOfflineModelHeight(inputSize);
+            const uint32_t modelWidth = SMRIFEWidthForHeight(inputSize, modelHeight);
+            rifeRunner = std::make_unique<Stellaria::Motion::RIFESP4Runner>();
+            rifeRunner->SetCommandQueue((__bridge void*)commandQueue);
+            rifeReady = rifeRunner->Load(SMOfflineRIFEModelPath(), modelWidth, modelHeight);
+            if (rifeReady) {
+                offlineEngine = [NSString stringWithFormat:@"RIFE SP4 %ux%u", modelWidth, modelHeight];
+            }
+        }
 
         CIContext* ciContext = device != nil
             ? [CIContext contextWithMTLDevice:device options:@{kCIContextWorkingColorSpace: [NSNull null]}]
@@ -421,7 +542,42 @@ BOOL SMWaitForWriterInputReady(AVAssetWriterInput* input,
                     }
 
                     BOOL renderedWithMetal = NO;
-                    if (interpolatePipeline != nil && textureCache != nullptr) {
+                    BOOL renderedWithRIFE = NO;
+                    const BOOL requiresUpscalePass = fabs(effectiveUpscale - 1.0) > 0.01;
+                    CVPixelBufferRef rifeOutputBuffer = nullptr;
+                    if (rifeReady && !rifeDisabledAfterFailure && textureCache != nullptr) {
+                        CVPixelBufferRef previousBuffer = CMSampleBufferGetImageBuffer(previousSample);
+                        CVPixelBufferRef currentPixelBuffer = CMSampleBufferGetImageBuffer(currentSample);
+                        rifeOutputBuffer = requiresUpscalePass
+                            ? SMCreateBGRAIntermediateBuffer(static_cast<size_t>(inputSize.width),
+                                                             static_cast<size_t>(inputSize.height))
+                            : outputBuffer;
+                        NSString* rifeMessage = nil;
+                        if (rifeOutputBuffer != nullptr &&
+                            SMRenderRIFESP4Frame(rifeRunner.get(),
+                                                 textureCache,
+                                                 previousBuffer,
+                                                 currentPixelBuffer,
+                                                 rifeOutputBuffer,
+                                                 static_cast<uint32_t>(inputSize.width),
+                                                 static_cast<uint32_t>(inputSize.height),
+                                                 static_cast<float>(t),
+                                                 &rifeMessage)) {
+                            if (requiresUpscalePass) {
+                                CIImage* rifed = [CIImage imageWithCVPixelBuffer:rifeOutputBuffer];
+                                CIImage* output = SMUpscaleImage(rifed, effectiveUpscale, outputExtent);
+                                [ciContext render:output toCVPixelBuffer:outputBuffer bounds:outputExtent colorSpace:colorSpace];
+                            }
+                            renderedWithRIFE = YES;
+                            renderedWithMetal = YES;
+                        } else {
+                            rifeDisabledAfterFailure = YES;
+                        }
+                        if (requiresUpscalePass && rifeOutputBuffer != nullptr) {
+                            CVPixelBufferRelease(rifeOutputBuffer);
+                        }
+                    }
+                    if (!renderedWithMetal && interpolatePipeline != nil && textureCache != nullptr) {
                         CVPixelBufferRef previousBuffer = CMSampleBufferGetImageBuffer(previousSample);
                         CVPixelBufferRef currentPixelBuffer = CMSampleBufferGetImageBuffer(currentSample);
                         id<MTLTexture> previousTexture = nil;
@@ -487,8 +643,9 @@ BOOL SMWaitForWriterInputReady(AVAssetWriterInput* input,
                     const double outputSeconds = CMTimeGetSeconds(nextOutputPTS);
                     const double normalized = durationSeconds > 0.0 ? MIN(outputSeconds / durationSeconds, 0.995) : 0.0;
                     if (outputFrameIndex % 8 == 0) {
+                        NSString* phase = renderedWithRIFE ? offlineEngine : @"Offline VFI + 2x SR";
                         dispatch_async(dispatch_get_main_queue(), ^{
-                            progress(normalized, SMStatus(@"Offline VFI + 2x SR", outputFrameIndex, normalized));
+                            progress(normalized, SMStatus(phase, outputFrameIndex, normalized));
                         });
                     }
                     nextOutputPTS = CMTimeAdd(nextOutputPTS, frameDuration);

@@ -10,7 +10,7 @@ Stellaria Motion is the video-interpolation runtime from Stellaria Studio. The a
 
 - Native macOS player for local realtime VFI, with keyboard controls, fullscreen playback, library management, and low-copy Metal presentation.
 - Bilibili browse/cache surface with recommendations, search, per-card quality selection, login state, favorites entry, episode-aware caching, detail panels, comments, and cache cleanup.
-- Offline export pipeline for deterministic 2x/60 fps interpolation through AVFoundation reader/writer.
+- Offline export pipeline for deterministic 2x/60 fps interpolation through AVFoundation reader/writer and the same RIFE/SP4 path used by realtime playback, with Metal/CI fallback when model assets are unavailable.
 - Metal-first RIFE pipeline with SP4 acceleration, motion safety controls, subtitle/barrage protection, bitrate controls, and fixed-layout diagnostics.
 - Chrome extension/native-host experiment kept as a compatibility lane, while the product default favors native cached playback for stability.
 
@@ -44,9 +44,13 @@ The browser extension remains useful for experiments and diagnostics, but the re
 
 ## Powered by Stellaria SP4
 
-Stellaria SP4 is the compact inference path used by the enhanced RIFE runtime. Motion uses the SP4 A1P model package to keep interpolation fast enough for realtime Apple Silicon playback while lowering CPU readback pressure. SP4 handles the high-performance motion-estimation side; Metal kernels handle texture packing, warping, blending, residual refinement, and presentation.
+Stellaria Motion consumes the real Stellaria SP4 SDK from the sibling checkout at `/Users/minsawa/Documents/Stellaria SP4` during local development. It is not a separate "Motion-only SP4" format. The Motion integration builds against the SDK headers and runtime concepts such as `.sp4` A1P assets, `sp4::LoadedAsset`, `sp4::RuntimePrepareOptions`, `sp4::PreparedRuntimeCache`, and the SP4 backend scheduling contract.
+
+Motion's `RIFESP4Runner` is a product adapter around that SDK: SP4 owns the compressed asset, loader, prepared runtime cache, and scheduling intent; Motion owns the video-specific Metal texture packing, flow/mask execution, warp/blend, residual refine, pacing, and `CAMetalLayer` presentation.
 
 SP4 matters here because realtime interpolation is not just model throughput. The full budget includes decode, upload/binding, inference, compositing, frame pacing, and output. Stellaria Motion treats SP4 as one stage in a measured media pipeline rather than a standalone benchmark.
+
+The low-power online path deliberately trades quality for stability. To stay inside realtime frame budgets and avoid high CPU/GPU power draw, Motion may use lower flow resolution, stronger protection, conservative bitrate, and native-frame fallback. That means browser/cached online interpolation cannot guarantee offline-export-level sharpness or artifact suppression. Offline export is the quality-first path.
 
 ## Architecture
 
@@ -101,6 +105,14 @@ cmake -S . -B build-app -G Ninja
 cmake --build build-app --target StellariaMotionApp -j4
 ctest --test-dir build-app --output-on-failure
 ```
+
+For SP4-backed RIFE acceleration, keep the Stellaria SP4 SDK checkout available or override its path:
+
+```bash
+cmake -S . -B build-app -DSTELLARIA_SP4_SDK_DIR="/Users/minsawa/Documents/Stellaria SP4"
+```
+
+The public repository does not vendor the SP4 SDK or model weights into source control. Local development bundles `Models/RIFE-SP4/rife_sp4_a1p.sp4` when present, or falls back to the sibling SP4 build output.
 
 Generate an Xcode project:
 
@@ -164,6 +176,7 @@ python3 -m venv /tmp/stellaria-coreml-venv
 - Bilibili login/cache features rely on the user's own account permissions.
 - The app does not redistribute paid media permissions.
 - The stable playback target is native cached or local media. Browser return remains an experimental compatibility lane.
+- Low-power online interpolation prioritizes stable playback and power control over maximum quality; visible softness or conservative fallback can happen when the realtime budget is tight.
 - The runtime avoids CPU texture readback on the realtime path whenever possible.
 
 ## License
