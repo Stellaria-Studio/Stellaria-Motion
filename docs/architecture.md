@@ -1,6 +1,6 @@
 # Stellaria Motion Architecture
 
-更新时间：2026-06-08
+更新时间：2026-06-14
 
 本文档是架构速览。详细技术解析见 `docs/Stellaria Motion 技术报告.md`。
 
@@ -112,14 +112,16 @@ Browser video element
 
 ```text
 AVAssetReader
-  -> CVPixelBuffer
+  -> BGRA CVPixelBuffer / IOSurface
   -> CVMetalTextureCache
-  -> fused_bgra_interpolate_lanczos_present
+  -> RIFESP4Runner when SP4 assets are available
+  -> fused_bgra_interpolate_lanczos_present fallback
+  -> Core Image mix/upscale fallback
   -> AVAssetWriterInputPixelBufferAdaptor
   -> MP4
 ```
 
-当前稳定离线链路仍以 fused kernel 为主。后续可以把 RIFE/SP4 接入离线导出，但必须保留 fused 导出作为稳定 fallback。
+当前离线链路已经接入 `RIFESP4Runner`，优先复用实时播放的 SP4/RIFE 路径生成中间帧。若 SP4 asset、Metal texture cache 或 runtime 执行不可用，导出会降级到 fused Metal 插帧；如果 Metal 路径也不可用，则使用 Core Image 线性混合与上采样兜底。离线导出因此成为质量优先路径，同时保留可完成导出的稳定 fallback。
 
 ## 7. 运行时 pacing
 
