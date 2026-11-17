@@ -1,0 +1,59 @@
+[
+  {
+    "id": "project-architecture",
+    "name": "Stellaria-Motion architecture",
+    "aliases": [
+      "Stellaria-Motion",
+      "Motion",
+      "架构",
+      "职责"
+    ],
+    "intent": "Apple Silicon native realtime video frame interpolation app powered by Stellaria SP4.",
+    "qualification": "DECLARED_PROJECT_KNOWLEDGE",
+    "invariants": [
+      "Source and project contracts remain authoritative; declared capabilities need matching execution evidence."
+    ],
+    "implementationPaths": [
+      "Sources"
+    ],
+    "dependsOn": [],
+    "acceptanceGates": [
+      "source identity",
+      "declared validation is not execution evidence"
+    ],
+    "sources": [
+      {
+        "path": "README.md",
+        "line": 1,
+        "commit": "29cdb1115f3ec376357a0355c6705580610b83f5"
+      },
+      {
+        "path": "docs/architecture.md",
+        "line": 1,
+        "commit": "29cdb1115f3ec376357a0355c6705580610b83f5"
+      }
+    ],
+    "validation": [
+      "cmake --build build-app --target StellariaMotionApp -j4",
+      "ctest --test-dir build-app --output-on-failure",
+      "cmake --build build-xcode --config Debug"
+    ],
+    "validationSources": [
+      {
+        "path": "README.md",
+        "line": 105,
+        "commit": "29cdb1115f3ec376357a0355c6705580610b83f5"
+      },
+      {
+        "path": "README.md",
+        "line": 106,
+        "commit": "29cdb1115f3ec376357a0355c6705580610b83f5"
+      },
+      {
+        "path": "README.md",
+        "line": 121,
+        "commit": "29cdb1115f3ec376357a0355c6705580610b83f5"
+      }
+    ]
+  }
+]

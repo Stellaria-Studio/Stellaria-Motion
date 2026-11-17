@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "name": "Stellaria-Motion",
+  "components": {
+    "project": {
+      "description": "Apple Silicon native realtime video frame interpolation app powered by Stellaria SP4.",
+      "paths": [
+        "Sources"
+      ],
+      "approved": [
+        "README.md"
+      ],
+      "required_files": [
+        "README.md"
+      ],
+      "build_targets": [],
+      "validation": [],
+      "pitfalls": [
+        "Source and project contracts remain authoritative; declared capabilities need matching execution evidence."
+      ],
+      "evidence": []
+    }
+  },
+  "build_metadata": [
+    "CMakeLists.txt"
+  ]
+}
